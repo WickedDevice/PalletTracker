@@ -5,6 +5,9 @@
   
 */
 
+#define MAX_STRING_LENGTH      (32)
+#define MAX_NUM_TARGET_MATCHES (5)
+
 #include <Adafruit_GPS.h>
 #include <SoftwareSerial.h>//We're not actually using this for anything, but the above library won't compile without it
 #include <SD.h>
@@ -319,4 +322,136 @@ void turnOffFONA() { //does the opposite of turning the FONA ON (ie. OFF)
     } else {
         Serial.println("FONA is already off, did nothing.");
     }
+}
+
+
+// ========== helper methods ============== 
+
+boolean addStringToList(char list[][MAX_STRING_LENGTH+1], char * str, uint8_t max_num_entries){
+  uint16_t free_index = 0xFFFF;
+  
+  if(strlen(str) <= MAX_STRING_LENGTH){
+    
+    // search the list for an empty space
+    // the last empty space must remain empty
+    // so don't include it in the search
+    for(uint16_t ii = 0; ii < (max_num_entries - 1); ii++){      
+      uint16_t len = strlen(list[ii]);  
+      if(0 == len){
+        free_index = ii;
+        break;
+      }
+    }
+        
+    // free index is the firs empty space in the list
+    // or 0xFFFF if no free entries were found
+    
+    // if free index points to a viable position
+    // then copy the candidate string into that position
+    // and limit the number of characters copied
+    if(free_index < (max_num_entries - 1)){         
+      char * tgt_addr = list[free_index];
+      memcpy(tgt_addr, 0, MAX_STRING_LENGTH+1); // fill with NULLs
+      strncpy(tgt_addr, str, MAX_STRING_LENGTH);  // copy the string in      
+      return true;
+    }
+    
+  }
+  
+  return false;
+}
+
+// pass in an array of strings to match against
+// the list is presumed to be terminated by a NULL string
+// this function can only handle up to MAX_NUM_TARGET_MATCHES matching targets
+boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx, char * target_buffer, uint16_t target_buffer_length, int32_t timeout_ms){
+  boolean match_found = false;
+  uint32_t target_buffer_index = 0;
+  static uint8_t match_char_idx[MAX_NUM_TARGET_MATCHES] = {0};
+  unsigned long previousMillis = millis();
+  
+  memset(match_char_idx, 0, MAX_NUM_TARGET_MATCHES);
+  
+  while(!match_found){ // until a match is found
+    unsigned long currentMillis = millis();
+    if((timeout_ms > 0) && (currentMillis - previousMillis >= timeout_ms)){
+       break;
+    }
+  
+    if(stream->available()){
+      previousMillis = millis(); // reset the timeout
+      char chr = stream->read(); // read a character
+      
+      // for each target match
+      for(uint8_t ii = 0; ii < MAX_NUM_TARGET_MATCHES; ii++){
+        uint16_t target_match_length = strlen(target_match[ii]);
+        // an empty string in the list signals the end of the list
+        if(target_match_length == 0){ 
+          break;
+        } 
+        
+        // if the current character is a match for this string
+        // advance it's match index, 
+        // otherwise reset its match index
+        if(chr == target_match[ii][match_char_idx[ii]]){
+           match_char_idx[ii]++;
+        }
+        else{
+           match_char_idx[ii] = 0;
+        }
+        
+        // if the match index is equal to the length of the string
+        // then it's a complete match
+        // return the string index that matched into match_idx
+        // and return true to the caller
+        if(match_char_idx[ii] >= target_match_length){      
+          *match_idx = ii;
+          match_found = true;
+          break;
+        }        
+      }
+      
+      if(!match_found && target_buffer != NULL){
+        if(target_buffer_index < target_buffer_length){
+          target_buffer[target_buffer_index++] = chr;
+        }
+        else{
+          break; // target buffer overflow
+        }
+      }      
+    }
+  }
+  
+  return match_found;   
+}
+
+// pass a single string to match against
+// the string must not be longer than 31 characters
+boolean readStreamUntil(Stream * stream, char * target_match, char * target_buffer, uint16_t target_buffer_length, int32_t timeout_ms){  
+  char target_match_array[2][MAX_STRING_LENGTH + 1] = {0};
+  uint8_t dummy_return;
+  
+  if(strlen(target_match) > 31){
+    return false; 
+  }
+  else{
+    addStringToList(target_match_array, target_match, 2);
+    return readStreamUntil(stream, target_match_array, &dummy_return, target_buffer, target_buffer_length, timeout_ms);
+  }
+}
+
+boolean readStreamUntil(Stream * stream, char * target_match, int32_t timeout_ms){
+  return readStreamUntil(stream, target_match, NULL, 0, timeout_ms);
+}
+
+boolean readStreamUntil(Stream * stream, char * target_match){
+  return readStreamUntil(stream, target_match, -1);
+}
+
+boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx, int32_t timeout_ms){
+  return readStreamUntil(stream, target_match, match_idx, NULL, 0, timeout_ms);
+}
+
+boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx){
+  return readStreamUntil(stream, target_match, match_idx, -1);  
 }
