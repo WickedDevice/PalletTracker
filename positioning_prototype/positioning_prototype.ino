@@ -485,7 +485,7 @@ boolean sendATCommand(char Command[]) { //Send an AT command and wait for a resp
     Serial.print(Command);
     Serial.println("'");
     
-    if(readStreamUntil(&Serial2, target_match, content, 63, ATtimeOut)){
+    if(readStreamUntil(&Serial2, target_match, &match_index, content, 63, ATtimeOut)){
       if(match_index == 0){
         strncpy(response, content, 63);
         return true;
