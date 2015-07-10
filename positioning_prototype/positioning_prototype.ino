@@ -15,9 +15,9 @@
 #define FONA_KEY 23 //powers board down
 #define FONA_PS 22 //status pin. Is the board on or not?
 
-String APN = "wholesale"; //Set APN for Mobile Service
+char * APN = "wholesale"; //Set APN for Mobile Service
 
-String response;
+char response[64] = {0};
 unsigned long time=0;
 unsigned long interval=300000;
 unsigned long ATtimeOut = 10000;
@@ -25,10 +25,10 @@ int keyTime = 2000; //Time needed to turn on the FONA
 word count=0;
 
 //Holders for Position Data
-String GSM_Lat;
-String GSM_Lon;
-String GSM_Date;
-String GSM_Time;
+char GSM_Lat[64] = {0};
+char GSM_Lon[64] = {0};
+char GSM_Date[64] = {0};
+char GSM_Time[64] = {0};
 
 //some GPS variables
 HardwareSerial gpsSerial = Serial2;
@@ -37,6 +37,139 @@ boolean usingInterrupt = false;
 
 //File for SD card
 File myFile;
+
+// ========== helper methods ============== 
+
+boolean addStringToList(char list[][MAX_STRING_LENGTH+1], char * str, uint8_t max_num_entries){
+  uint16_t free_index = 0xFFFF;
+  
+  if(strlen(str) <= MAX_STRING_LENGTH){
+    
+    // search the list for an empty space
+    // the last empty space must remain empty
+    // so don't include it in the search
+    for(uint16_t ii = 0; ii < (max_num_entries - 1); ii++){      
+      uint16_t len = strlen(list[ii]);  
+      if(0 == len){
+        free_index = ii;
+        break;
+      }
+    }
+        
+    // free index is the firs empty space in the list
+    // or 0xFFFF if no free entries were found
+    
+    // if free index points to a viable position
+    // then copy the candidate string into that position
+    // and limit the number of characters copied
+    if(free_index < (max_num_entries - 1)){         
+      char * tgt_addr = list[free_index];
+      memcpy(tgt_addr, 0, MAX_STRING_LENGTH+1); // fill with NULLs
+      strncpy(tgt_addr, str, MAX_STRING_LENGTH);  // copy the string in      
+      return true;
+    }
+    
+  }
+  
+  return false;
+}
+
+// pass in an array of strings to match against
+// the list is presumed to be terminated by a NULL string
+// this function can only handle up to MAX_NUM_TARGET_MATCHES matching targets
+boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx, char * target_buffer, uint16_t target_buffer_length, int32_t timeout_ms){
+  boolean match_found = false;
+  uint32_t target_buffer_index = 0;
+  static uint8_t match_char_idx[MAX_NUM_TARGET_MATCHES] = {0};
+  unsigned long previousMillis = millis();
+  
+  memset(match_char_idx, 0, MAX_NUM_TARGET_MATCHES);
+  
+  while(!match_found){ // until a match is found
+    unsigned long currentMillis = millis();
+    if((timeout_ms > 0) && (currentMillis - previousMillis >= timeout_ms)){
+       break;
+    }
+  
+    if(stream->available()){
+      previousMillis = millis(); // reset the timeout
+      char chr = stream->read(); // read a character
+      
+      Serial.print(chr); // comment out only for debug
+      
+      // for each target match
+      for(uint8_t ii = 0; ii < MAX_NUM_TARGET_MATCHES; ii++){
+        uint16_t target_match_length = strlen(target_match[ii]);
+        // an empty string in the list signals the end of the list
+        if(target_match_length == 0){ 
+          break;
+        } 
+        
+        // if the current character is a match for this string
+        // advance it's match index, 
+        // otherwise reset its match index
+        if(chr == target_match[ii][match_char_idx[ii]]){
+           match_char_idx[ii]++;
+        }
+        else{
+           match_char_idx[ii] = 0;
+        }
+        
+        // if the match index is equal to the length of the string
+        // then it's a complete match
+        // return the string index that matched into match_idx
+        // and return true to the caller
+        if(match_char_idx[ii] >= target_match_length){      
+          *match_idx = ii;
+          match_found = true;
+          break;
+        }        
+      }
+      
+      if(!match_found && target_buffer != NULL){
+        if(target_buffer_index < target_buffer_length){
+          target_buffer[target_buffer_index++] = chr;
+        }
+        else{
+          break; // target buffer overflow
+        }
+      }      
+    }
+  }
+  
+  return match_found;   
+}
+
+// pass a single string to match against
+// the string must not be longer than 31 characters
+boolean readStreamUntil(Stream * stream, char * target_match, char * target_buffer, uint16_t target_buffer_length, int32_t timeout_ms){  
+  char target_match_array[2][MAX_STRING_LENGTH + 1] = {0};
+  uint8_t dummy_return;
+  
+  if(strlen(target_match) > 31){
+    return false; 
+  }
+  else{
+    addStringToList(target_match_array, target_match, 2);
+    return readStreamUntil(stream, target_match_array, &dummy_return, target_buffer, target_buffer_length, timeout_ms);
+  }
+}
+
+boolean readStreamUntil(Stream * stream, char * target_match, int32_t timeout_ms){
+  return readStreamUntil(stream, target_match, NULL, 0, timeout_ms);
+}
+
+boolean readStreamUntil(Stream * stream, char * target_match){
+  return readStreamUntil(stream, target_match, -1);
+}
+
+boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx, int32_t timeout_ms){
+  return readStreamUntil(stream, target_match, match_idx, NULL, 0, timeout_ms);
+}
+
+boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx){
+  return readStreamUntil(stream, target_match, match_idx, -1);  
+}
 
 void setup() {
   //setup the FONA miniGSM
@@ -66,7 +199,7 @@ void setup() {
   gpsSerial.println(PMTK_Q_RELEASE);
   
   //Setup the serial ports
-  Serial.begin(9600); //USB Serial
+  Serial.begin(115200); //USB Serial
   Serial.println("Serial Ready");
   Serial2.begin(9600); //FONA miniGSM serial
   Serial.println("Serial2 Ready");
@@ -179,12 +312,80 @@ void loop() {
 }
 
 boolean getLocation() {
-    String content = "";
+    char content[64] = {0};
+    uint8_t match_index = 0;
+    const uint8_t num_targets = 4;
+    char target_match[num_targets][MAX_STRING_LENGTH+1] = {0};
+    addStringToList(target_match, "OK", num_targets);  // match 0
+    addStringToList(target_match, "ERROR", num_targets); // match 1
+    addStringToList(target_match, "+CIPGSMLOC:", num_targets); // match 2
+    if(readStreamUntil(&Serial2, target_match, &match_index, ATtimeOut)){
+      if(match_index == 2){
+        if(readStreamUntil(&Serial2, target_match, &match_index, content, 63, ATtimeOut)){
+          if(match_index == 0){
+            Serial.print("Got content: \"");
+            Serial.print(content);
+            Serial.println("\"");
+            
+            char * token = strtok(content, ",");
+            int field_number = 0;
+            while(token != NULL){
+               Serial.print("Token #");
+               Serial.print(field_number);
+               Serial.print(": ");
+               Serial.println(token);
+               
+               switch(field_number){
+                 case 0: // location code - discard
+                    break;
+                 case 1: // longitude
+                    strncpy(GSM_Lon, token, 63);
+                    break;
+                 case 2: // latitude
+                    strncpy(GSM_Lat, token, 63);
+                    break;
+                 case 3: // date
+                    strncpy(GSM_Date, token, 63);
+                    break;
+                 case 4: // time
+                    strncpy(GSM_Time, token, 63);     
+                    break;
+               }
+               
+               field_number++;
+               token = strtok(NULL, ",");
+            }
+            Serial.println("Done.");
+            
+            if(field_number != 5){
+              Serial.print("Panic 3, field number = ");
+              Serial.println(field_number); 
+            }
+            
+          }
+          else{
+            Serial.print("Panic 2, match index = ");
+            Serial.println(match_index);
+          }  
+        }
+        else{
+          Serial.println("Timeout waiting for 'OK' after '+CIPGSMLOC:'"); 
+        }
+      }
+      else{
+        // PANIC
+        Serial.println("Panic: 1"); 
+      }
+    }
+    
+    Serial2.println("AT+CIPGSMLOC=1,1");
+    
+    /*    
     char character;
     int complete = 0;
     char c;
     unsigned long commandClock = millis();                      // Start the timeout clock
-    Serial2.println("AT+CIPGSMLOC=1,1");
+
     while(!complete && commandClock <= millis()+ATtimeOut) { // Need to give the modem time to complete command
         while(!Serial2.available() && commandClock <= millis()+ATtimeOut); //wait while there is no data
         while(Serial2.available()) {   // if there is data to read...
@@ -208,6 +409,7 @@ boolean getLocation() {
         }
         complete = 1; //this doesn't work. 
     }
+  */
 }
 void setupGPRS() { //all the commands to setup a GPRS context and get ready for HTTP command
     //the sendATCommand sends the command to the FONA and waits until the recieves a response before continueing on. 
@@ -217,30 +419,91 @@ void setupGPRS() { //all the commands to setup a GPRS context and get ready for 
     }
     Serial.print("Set to TEXT Mode: ");
     if(sendATCommand("AT+CMGF=1")){ //sets SMS mode to TEXT mode....This MIGHT not be needed. But it doesn't break anything with it there. 
-        Serial.println(response);
+        Serial.println("...OK");
+        Serial.print("Response - '");
+        Serial.print(response);
+        Serial.println("'");
+    }
+    else{
+        Serial.println("...Failed");
     }
     Serial.print("Attach GPRS: ");
     if(sendATCommand("AT+CGATT=1")){ //Attach to GPRS service (1 - attach, 0 - disengage)
-        Serial.println(response);
+        Serial.println("...OK");
+        Serial.print("Response - '");
+        Serial.print(response);
+        Serial.println("'");
+    }
+    else{
+        Serial.println("...Failed");
     }
     Serial.print("Set Connection Type To GPRS: "); //AT+SAPBR - Bearer settings for applications based on IP
     if(sendATCommand("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"")){ //3 - Set bearer perameters
-        Serial.println(response);
+        Serial.println("...OK");
+        Serial.print("Response - '");
+        Serial.print(response);
+        Serial.println("'");
+    }
+    else{
+        Serial.println("...Failed");
     }
     Serial.print("Set APN: ");
     if(setAPN()) {
-        Serial.println(response);
+        Serial.println("...OK");
+        Serial.print("Response - '");
+        Serial.print(response);
+        Serial.println("'");
     }
+    else{
+        Serial.println("...Failed");
+    }
+    Serial.print("Set SAPBR: ");
     if(sendATCommand("AT+SAPBR=1,1")) { //Open Bearer
-        if(response == "OK") {
+        if(strncmp(response, "OK", 2) == 0) {
             Serial.println("Engaged GPRS");
         } else {
             Serial.println("GPRS Already on");
         }
     }
+    else{
+       Serial.println("...Failed");
+    }
 }
 
 boolean sendATCommand(char Command[]) { //Send an AT command and wait for a response
+    static char content[64] = {0};
+    
+    uint8_t match_index = 0;
+    const uint8_t num_targets = 3;
+    static char target_match[num_targets][MAX_STRING_LENGTH+1] = {0};
+    addStringToList(target_match, "OK", num_targets);  // match 0
+    addStringToList(target_match, "ERROR", num_targets); // match 1    
+    
+    Serial2.println(Command);
+    
+    Serial.print("Sending command: '");
+    Serial.print(Command);
+    Serial.println("'");
+    
+    if(readStreamUntil(&Serial2, target_match, content, 63, ATtimeOut)){
+      if(match_index == 0){
+        strncpy(response, content, 63);
+        return true;
+      }
+      else{
+        Serial.print("Error response to '");
+        Serial.print(Command);
+        Serial.println("'");
+      }
+    }
+    else{
+      Serial.print("Timeout waitng for 'OK' in response to '");
+      Serial.print(Command);
+      Serial.println("'");
+      return false;
+    }
+
+    /*
     int complete = 0; // have we collected the whole response?
     char c; //capture serial stream
     String content; //place to save serial stream
@@ -259,6 +522,9 @@ boolean sendATCommand(char Command[]) { //Send an AT command and wait for a resp
     }
     if (complete ==1) return 1; //Is it done? return a 1
     else return 0; //otherwise don't (this will trigger if the command times out) 
+    
+    */   
+    
     /*
         Note: This function may not work perfectly...but it works pretty well. I'm not totally sure how well the timeout function works. It'll be worth testing. 
         Another bug is that if you send a command that returns with two responses, an OK, and then something else, it will ignore the something else and just say DONE as soon as the first response happens. 
@@ -267,6 +533,10 @@ boolean sendATCommand(char Command[]) { //Send an AT command and wait for a resp
 }
 
 boolean setAPN() { //Set the APN. See sendATCommand for full comments on flow
+    static char cmd[64] = {0};
+    snprintf(cmd, 63, "", APN);
+    
+    /*
     int complete = 0;
     char c;
     String content;
@@ -287,6 +557,7 @@ boolean setAPN() { //Set the APN. See sendATCommand for full comments on flow
     }
     if (complete ==1) return 1;
     else return 0;
+    */
 }
 
 void flushFONA() { //if there is anything is the Serial2 serial Buffer, clear it out and print it in the Serial Monitor.
@@ -325,133 +596,3 @@ void turnOffFONA() { //does the opposite of turning the FONA ON (ie. OFF)
 }
 
 
-// ========== helper methods ============== 
-
-boolean addStringToList(char list[][MAX_STRING_LENGTH+1], char * str, uint8_t max_num_entries){
-  uint16_t free_index = 0xFFFF;
-  
-  if(strlen(str) <= MAX_STRING_LENGTH){
-    
-    // search the list for an empty space
-    // the last empty space must remain empty
-    // so don't include it in the search
-    for(uint16_t ii = 0; ii < (max_num_entries - 1); ii++){      
-      uint16_t len = strlen(list[ii]);  
-      if(0 == len){
-        free_index = ii;
-        break;
-      }
-    }
-        
-    // free index is the firs empty space in the list
-    // or 0xFFFF if no free entries were found
-    
-    // if free index points to a viable position
-    // then copy the candidate string into that position
-    // and limit the number of characters copied
-    if(free_index < (max_num_entries - 1)){         
-      char * tgt_addr = list[free_index];
-      memcpy(tgt_addr, 0, MAX_STRING_LENGTH+1); // fill with NULLs
-      strncpy(tgt_addr, str, MAX_STRING_LENGTH);  // copy the string in      
-      return true;
-    }
-    
-  }
-  
-  return false;
-}
-
-// pass in an array of strings to match against
-// the list is presumed to be terminated by a NULL string
-// this function can only handle up to MAX_NUM_TARGET_MATCHES matching targets
-boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx, char * target_buffer, uint16_t target_buffer_length, int32_t timeout_ms){
-  boolean match_found = false;
-  uint32_t target_buffer_index = 0;
-  static uint8_t match_char_idx[MAX_NUM_TARGET_MATCHES] = {0};
-  unsigned long previousMillis = millis();
-  
-  memset(match_char_idx, 0, MAX_NUM_TARGET_MATCHES);
-  
-  while(!match_found){ // until a match is found
-    unsigned long currentMillis = millis();
-    if((timeout_ms > 0) && (currentMillis - previousMillis >= timeout_ms)){
-       break;
-    }
-  
-    if(stream->available()){
-      previousMillis = millis(); // reset the timeout
-      char chr = stream->read(); // read a character
-      
-      // for each target match
-      for(uint8_t ii = 0; ii < MAX_NUM_TARGET_MATCHES; ii++){
-        uint16_t target_match_length = strlen(target_match[ii]);
-        // an empty string in the list signals the end of the list
-        if(target_match_length == 0){ 
-          break;
-        } 
-        
-        // if the current character is a match for this string
-        // advance it's match index, 
-        // otherwise reset its match index
-        if(chr == target_match[ii][match_char_idx[ii]]){
-           match_char_idx[ii]++;
-        }
-        else{
-           match_char_idx[ii] = 0;
-        }
-        
-        // if the match index is equal to the length of the string
-        // then it's a complete match
-        // return the string index that matched into match_idx
-        // and return true to the caller
-        if(match_char_idx[ii] >= target_match_length){      
-          *match_idx = ii;
-          match_found = true;
-          break;
-        }        
-      }
-      
-      if(!match_found && target_buffer != NULL){
-        if(target_buffer_index < target_buffer_length){
-          target_buffer[target_buffer_index++] = chr;
-        }
-        else{
-          break; // target buffer overflow
-        }
-      }      
-    }
-  }
-  
-  return match_found;   
-}
-
-// pass a single string to match against
-// the string must not be longer than 31 characters
-boolean readStreamUntil(Stream * stream, char * target_match, char * target_buffer, uint16_t target_buffer_length, int32_t timeout_ms){  
-  char target_match_array[2][MAX_STRING_LENGTH + 1] = {0};
-  uint8_t dummy_return;
-  
-  if(strlen(target_match) > 31){
-    return false; 
-  }
-  else{
-    addStringToList(target_match_array, target_match, 2);
-    return readStreamUntil(stream, target_match_array, &dummy_return, target_buffer, target_buffer_length, timeout_ms);
-  }
-}
-
-boolean readStreamUntil(Stream * stream, char * target_match, int32_t timeout_ms){
-  return readStreamUntil(stream, target_match, NULL, 0, timeout_ms);
-}
-
-boolean readStreamUntil(Stream * stream, char * target_match){
-  return readStreamUntil(stream, target_match, -1);
-}
-
-boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx, int32_t timeout_ms){
-  return readStreamUntil(stream, target_match, match_idx, NULL, 0, timeout_ms);
-}
-
-boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1], uint8_t * match_idx){
-  return readStreamUntil(stream, target_match, match_idx, -1);  
-}
