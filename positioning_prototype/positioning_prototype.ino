@@ -20,7 +20,7 @@ char * APN = "wholesale"; //Set APN for Mobile Service
 char response[64] = {0};
 unsigned long time=0;
 unsigned long interval=300000;
-unsigned long ATtimeOut = 10000;
+long ATtimeOut = 10000;
 int keyTime = 2000; //Time needed to turn on the FONA
 word count=0;
 
@@ -171,6 +171,14 @@ boolean readStreamUntil(Stream * stream, char target_match[][MAX_STRING_LENGTH+1
   return readStreamUntil(stream, target_match, match_idx, -1);  
 }
 
+void flushStreamInput(Stream * stream){
+  delay(10);
+  while(stream->available()){
+    stream->read();
+  }  
+}
+  
+
 void setup() {
   //setup the FONA miniGSM
   pinMode(FONA_PS, INPUT);
@@ -319,6 +327,10 @@ boolean getLocation() {
     addStringToList(target_match, "OK", num_targets);  // match 0
     addStringToList(target_match, "ERROR", num_targets); // match 1
     addStringToList(target_match, "+CIPGSMLOC:", num_targets); // match 2
+    
+    flushStreamInput(&Serial2);
+    Serial2.println("AT+CIPGSMLOC=1,1");    
+    
     if(readStreamUntil(&Serial2, target_match, &match_index, ATtimeOut)){
       if(match_index == 2){
         if(readStreamUntil(&Serial2, target_match, &match_index, content, 63, ATtimeOut)){
@@ -377,8 +389,6 @@ boolean getLocation() {
         Serial.println("Panic: 1"); 
       }
     }
-    
-    Serial2.println("AT+CIPGSMLOC=1,1");
     
     /*    
     char character;
@@ -479,14 +489,16 @@ boolean sendATCommand(char Command[]) { //Send an AT command and wait for a resp
     addStringToList(target_match, "OK", num_targets);  // match 0
     addStringToList(target_match, "ERROR", num_targets); // match 1    
     
+    flushStreamInput(&Serial2);
     Serial2.println(Command);
     
     Serial.print("Sending command: '");
     Serial.print(Command);
-    Serial.println("'");
+    Serial.print("'...");
     
     if(readStreamUntil(&Serial2, target_match, &match_index, content, 63, ATtimeOut)){
       if(match_index == 0){
+        Serial.println("Got 'OK'");
         strncpy(response, content, 63);
         return true;
       }
