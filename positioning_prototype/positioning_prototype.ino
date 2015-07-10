@@ -214,15 +214,7 @@ void setup() {
   Serial3.begin(9600); //GPSlogger serial
   Serial.println("Serial3 Ready");
   
-  //Setup SD card
-  Serial.print("Initializing SD card...");
-  pinMode(53, OUTPUT);
   
-  if(!SD.begin(53)) {
-    Serial.println("initialization failed!");
-    return;
-  }
-  Serial.println("initialization done.");   
 }
 
 void loop() {
@@ -250,62 +242,55 @@ void loop() {
   
   //Get GPS location data from GPSlogger
     // if a sentence is received, we can check the checksum, parse it...
-  if (GPS.newNMEAreceived()) {
+  unsigned long delayGPS = 10000;
+  unsigned long startGPS = millis();
+  while(millis()<startGPS + delayGPS){
+    if (GPS.newNMEAreceived()) {
     // a tricky thing here is if we print the NMEA sentence, or data
     // we end up not listening and catching other sentences! 
     // so be very wary if using OUTPUT_ALLDATA and trytng to print out data
     //Serial.println(GPS.lastNMEA());   // this also sets the newNMEAreceived() flag to false
   
-    if (!GPS.parse(GPS.lastNMEA()))   // this also sets the newNMEAreceived() flag to false
-      return;  // we can fail to parse a sentence in which case we should just wait for another
+      if (!GPS.parse(GPS.lastNMEA()))   // this also sets the newNMEAreceived() flag to false
+        return;  // we can fail to parse a sentence in which case we should just wait for another
+    }
   }
   
   
   //Record location data to SD card
   // open the file. note that only one file can be open at a time,
   // so you have to close this one before opening another.
-  myFile = SD.open("PositionProtoype.txt", FILE_WRITE);
+  
+    //Setup SD card
+  Serial.print("Initializing SD card...");
+  pinMode(53, OUTPUT);
+  
+  if(!SD.begin(53)) {
+    Serial.println("initialization failed!");
+    return;
+  }
+  Serial.println("initialization done."); 
+  myFile = SD.open("Test.txt", FILE_WRITE);
   
   // if the file opened okay, write to it:
   if (myFile) {
-    Serial.print("Writing to PositionPrototype.txt...");
+    Serial.print("Writing to Test.txt...");
     
-    myFile.print("count: "); myFile.println(count);
-    myFile.print("Milliseconds: "); myFile.println(time);
-    
-    myFile.println("GSM data");
-    myFile.print("Latitude: "); myFile.println(GSM_Lat);
-    myFile.print("Longitude: "); myFile.println(GSM_Lon);
-    myFile.print("Date: "); myFile.println(GSM_Date);
-    myFile.print("Time: "); myFile.println(GSM_Time);
-    
-    myFile.println("GPS data:");
-    myFile.print("\nTime: ");
+    myFile.print(count); myFile.print(',');
+    myFile.print(GSM_Lat); myFile.print(',');
+    myFile.print(GSM_Lon); myFile.print(',');
+    myFile.print(GSM_Date); myFile.print(',');
+    myFile.print(GSM_Time); myFile.print(',');
+    myFile.print(GPS.latitude, 4); myFile.print(GPS.lat); myFile.print(','); 
+    myFile.print(GPS.longitude, 4); myFile.print(GPS.lon); myFile.print(',');
+    myFile.print("20"); myFile.print(GPS.year, DEC); myFile.print('/');
+    myFile.print(GPS.month, DEC); myFile.print('/');
+    myFile.print(GPS.day, DEC); myFile.print(',');
     myFile.print(GPS.hour, DEC); myFile.print(':');
     myFile.print(GPS.minute, DEC); myFile.print(':');
     myFile.print(GPS.seconds, DEC); myFile.print('.');
     myFile.println(GPS.milliseconds);
-    myFile.print("Date: ");
-    myFile.print(GPS.day, DEC); myFile.print('/');
-    myFile.print(GPS.month, DEC); myFile.print("/20");
-    myFile.println(GPS.year, DEC);
-    myFile.print("Fix: "); myFile.print((int)GPS.fix);
-    myFile.print(" quality: "); myFile.println((int)GPS.fixquality); 
-    if (GPS.fix) {
-      myFile.print("Location: ");
-      myFile.print(GPS.latitude, 4); myFile.print(GPS.lat);
-      myFile.print(", "); 
-      myFile.print(GPS.longitude, 4); myFile.println(GPS.lon);
-      myFile.print("Location (in degrees, works with Google Maps): ");
-      myFile.print(GPS.latitudeDegrees, 4);
-      myFile.print(", "); 
-      myFile.println(GPS.longitudeDegrees, 4);
-      
-      myFile.print("Speed (knots): "); myFile.println(GPS.speed);
-      myFile.print("Angle: "); myFile.println(GPS.angle);
-      myFile.print("Altitude: "); myFile.println(GPS.altitude);
-      myFile.print("Satellites: "); myFile.println((int)GPS.satellites);
-    }
+
 	// close the file:
     myFile.close();
     Serial.println("done.");
@@ -317,6 +302,46 @@ void loop() {
   //update count & delay
   count++;
   while(millis() - time < interval){};
+}
+
+void ltrim(char * str){
+  uint16_t len = strlen(str);
+  uint16_t first_non_blank_index = 0;
+  for(uint16_t ii = 0; ii < len; ii++){
+    if(!isblank(str[ii])){
+      first_non_blank_index = ii;
+      break;   
+    }   
+  }
+  
+  if(0 != first_non_blank_index){
+      uint16_t ii = first_non_blank_index;
+      for(;;){
+        str[ii-first_non_blank_index] = str[ii];
+        
+        if(str[ii] == '\0'){
+          break; 
+        }
+        
+        ii++;
+      }
+   }  
+}
+
+void rtrim(char * str){
+  uint16_t len = strlen(str);
+  char * tmp = &str[len-1];
+  if(len > 0){
+    while(isblank(*tmp) && (tmp >= str)){
+      *tmp = '\0';
+      tmp--;
+    }
+  }
+}
+
+void trim(char * str){
+  ltrim(str);
+  rtrim(str);
 }
 
 boolean getLocation() {
@@ -472,7 +497,7 @@ void setupGPRS() { //all the commands to setup a GPRS context and get ready for 
         if(strncmp(response, "OK", 2) == 0) {
             Serial.println("Engaged GPRS");
         } else {
-            Serial.println("GPRS Already on");
+            Serial.println("Did not engage GPRS");
         }
     }
     else{
